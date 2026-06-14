@@ -34,6 +34,7 @@ from agent_kit.agent.events import (
     TurnComplete,
 )
 from agent_kit.config import AgentConfig
+from agent_kit.errors import UnauthorizedError
 from agent_kit.llm import LLM
 from agent_kit.memory.episodic import EpisodicMemory
 from agent_kit.memory.factual import FactualMemory
@@ -143,15 +144,29 @@ class Agent:
                 conversation_id, Turn(role="assistant", text=final_text)
             )
 
-        # Off the hot path: episodic upsert + factual extraction.
-        self._enqueue(self._episodic.write(user_id, conversation_id, Turn(role="user", text=user_message)))
+        # Off the hot path: factual extraction + token-budget-driven rollover of the
+        # working buffer into the rolling summary. Episodic embedding is deferred to
+        # conversation end (see ``end_conversation``), not written per turn.
         if final_text:
-            self._enqueue(
-                self._episodic.write(
-                    user_id, conversation_id, Turn(role="assistant", text=final_text)
-                )
-            )
             self._enqueue(self._factual.extract(user_id, user_message, final_text))
+        self._enqueue(self._working.maybe_rollover(conversation_id, user_id))
+
+    async def end_conversation(self, user_id: str, conversation_id: str) -> None:
+        """Embed the whole conversation as one episodic point, then forget hot state.
+
+        Called when a conversation ends (e.g. WebSocket disconnect / idle close).
+        Reads the rolling summary + remaining buffer, writes a single episodic point
+        so the conversation is recallable in future ones. Best-effort cleanup: a
+        missing/expired session, or a caller who does not own the conversation, is a
+        no-op (ownership is enforced by the load).
+        """
+        try:
+            snapshot = await self._working.load(conversation_id, user_id)
+        except UnauthorizedError:
+            return
+        await self._episodic.write_conversation(
+            user_id, conversation_id, snapshot.summary, snapshot.buffer
+        )
 
     def _enqueue(self, coro) -> None:
         """Fire-and-forget a background memory write, with error isolation."""

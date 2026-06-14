@@ -16,18 +16,16 @@ llm_kit's default estimator; a real tokenizer can be injected later.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from agent_kit.config import ContextConfig
 from agent_kit.errors import ContextOverflowError
 from agent_kit.stores.types import MemoryHit, Turn
+from agent_kit.tokens import Estimator, estimate_tokens
 
-Estimator = Callable[[str], int]
-
-
-def default_estimator(text: str) -> int:
-    return max(0, len(text) // 4)
+# Back-compat alias: the canonical estimator now lives in ``agent_kit.tokens`` so
+# lower layers (memory rollover) can share it without importing ``agent/``.
+default_estimator = estimate_tokens
 
 
 @dataclass(slots=True)

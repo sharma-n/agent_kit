@@ -70,7 +70,7 @@ class AgentService:
             cleanups.append(shared_client.aclose)
 
         stores = build_stores(cfg)
-        working = WorkingMemory(stores.session, cfg.memory.working)
+        working = WorkingMemory(stores.session, cfg.memory.working, llm=llm)
         episodic = EpisodicMemory(
             stores.vectors, embedder, cfg.memory.episodic, llm=llm
         )

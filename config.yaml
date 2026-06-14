@@ -11,7 +11,7 @@ agent:
 memory:
   working:
     buffer_turns: 12
-    summary_trigger: 16
+    buffer_token_budget: 2048
     ttl_s: 3600
   episodic:
     top_k: 3

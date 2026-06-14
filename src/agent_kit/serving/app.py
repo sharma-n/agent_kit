@@ -44,11 +44,13 @@ def create_app(service: AgentService) -> FastAPI:
     @app.websocket("/ws/{conversation_id}")
     async def ws(websocket: WebSocket, conversation_id: str) -> None:
         await websocket.accept()
+        last_user_id: str | None = None
         try:
             while True:
                 raw = await websocket.receive_text()
                 payload = json.loads(raw)
                 user_id = payload["user_id"]
+                last_user_id = user_id
                 message = payload["message"]
                 try:
                     async for event in service.agent.run_turn(
@@ -58,7 +60,9 @@ def create_app(service: AgentService) -> FastAPI:
                 except UnauthorizedError as exc:
                     await websocket.send_json({"type": "error", "error": str(exc)})
         except WebSocketDisconnect:
-            return
+            # Conversation ended → embed it as one episodic point (off the hot path).
+            if last_user_id is not None:
+                await service.agent.end_conversation(last_user_id, conversation_id)
 
     @app.get("/sse/{conversation_id}")
     async def sse(

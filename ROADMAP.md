@@ -61,13 +61,18 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⬜ not started
 
 ### 🟡 M6 — Memory write paths
 - ✅ Read paths (episodic retrieve, factual get) on the hot path.
-- ✅ Write *methods* exist: `EpisodicMemory.write`, `FactualMemory.extract` /
-  `remember`; the loop **enqueues** them fire-and-forget after `TurnComplete`.
-- ⬜ Rolling-summary rollover: `WorkingMemory.needs_rollover` exists but the
-  summarizer (oldest turns → `invoke`+`response_model` → fold into summary → drop
-  from buffer) is not wired to run.
+- ✅ Factual write paths: `FactualMemory.extract` / `remember`; the loop **enqueues**
+  extraction fire-and-forget after `TurnComplete`.
+- ✅ Rolling-summary rollover (token-budget-driven): `WorkingMemory.maybe_rollover`
+  summarizes the oldest turns (`invoke`+`response_model` → fold into summary → drop
+  from buffer) when the buffer exceeds `buffer_token_budget`; enqueued after each turn.
+- ✅ Episodic embedding deferred to conversation end: `EpisodicMemory.write_conversation`
+  embeds the whole conversation as one point; `Agent.end_conversation` is invoked on WS
+  disconnect. No per-turn embedding.
 - ⬜ Robust background-write infrastructure (currently `asyncio.create_task` with
   error suppression; no durability/retry if a write fails).
+- ⬜ Conversation-end trigger beyond WS disconnect (idle-TTL close hook; SSE has no
+  disconnect signal, so its conversations are not yet finalized).
 
 ---
 
@@ -114,11 +119,19 @@ Plan when we get there:
 
 ---
 
+## Settled design decisions
+
+- **Rolling-summary trigger**: Token-budget-driven. Rollover fires when working buffer
+  exceeds budget, not at fixed turn counts, to respect context limits. Respects the
+  same tier constraints as context assembly.
+- **Episodic embedding strategy**: Conversation-end only (not per-turn). One embedding
+  per conversation; cheaper and more scalable. Trades per-turn specificity for
+  compactness and cost. Can revisit to per-N-turns or per-turn if finer granularity
+  is needed.
+
 ## Open questions (SPEC §16) — current stance
 - **Transcript durability**: deferred. Redis working buffer + episodic are the only
   retention for now; no `messages` table yet.
 - **Multi-tenant isolation** beyond `user_id`: deferred (per-tenant Qdrant
   collections if/when needed).
 - **Query rewrite default**: off by default; per-deployment toggle exists.
-- **Episodic granularity**: one point per turn currently; per-session-summary is a
-  future option affecting precision and Qdrant growth.

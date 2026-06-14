@@ -403,7 +403,7 @@ nested dataclasses, `StrEnum`s). New config sections:
 ```
 agent:     max_iterations, per_tool_timeout_s, per_turn_budget_s, system_prompt
 memory:
-  working:   buffer_turns (N), summary_trigger, ttl_s
+  working:   buffer_turns (N), buffer_token_budget (token-driven rollover), ttl_s
   episodic:  top_k, min_score, query_augment_turns, query_rewrite (bool)
   factual:   extraction_enabled (bool)
 context:   max_input_tokens, output_reserve_tokens, safety_margin

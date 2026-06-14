@@ -1,8 +1,10 @@
 """Episodic memory (SPEC §7.2, §6.4): retrieval over the per-user vector store.
 
-Read (retrieve) is on the hot path every turn. Write is off the hot path — the
-agent loop enqueues it after ``TurnComplete``; the method exists here but is not
-called synchronously during a turn.
+Read (retrieve) is on the hot path every turn. Write is off the hot path and, by
+design, **per conversation rather than per turn**: the whole conversation (rolling
+summary + remaining buffer) is embedded as a single point when the conversation
+ends. This keeps the vector store compact and embedding cost low, trading per-turn
+recall precision for coarse-grained, conversation-level memory.
 """
 
 from __future__ import annotations
@@ -48,25 +50,42 @@ class EpisodicMemory:
             user_id, vector, k=self._cfg.top_k, min_score=self._cfg.min_score
         )
 
-    async def write(
-        self, user_id: str, conversation_id: str, turn: Turn
+    async def write_conversation(
+        self,
+        user_id: str,
+        conversation_id: str,
+        summary: str,
+        turns: list[Turn],
     ) -> None:
-        """Embed a turn and upsert it as one episodic point (off the hot path)."""
-        if not turn.text:
+        """Embed a whole conversation as ONE episodic point (at conversation end).
+
+        Composes the rolling summary + remaining buffer into a single transcript,
+        embeds it, and upserts one point. No-op for an empty conversation.
+        """
+        text = self._compose(summary, turns)
+        if not text:
             return
-        vector = (await self._embedder.embed_one(turn.text)).vector
+        vector = (await self._embedder.embed_one(text)).vector
         point = MemoryPoint(
             id=str(uuid.uuid4()),
             vector=vector,
             payload={
                 "user_id": user_id,
                 "conversation_id": conversation_id,
-                "text": turn.text,
-                "role": turn.role,
+                "text": text,
+                "kind": "conversation",
                 "ts": time.time(),
             },
         )
         await self._store.add([point])
+
+    @staticmethod
+    def _compose(summary: str, turns: list[Turn]) -> str:
+        parts: list[str] = []
+        if summary:
+            parts.append(summary)
+        parts.extend(f"{t.role}: {t.text}" for t in turns if t.text)
+        return "\n".join(parts).strip()
 
     async def _build_query(self, user_message: str, recent_turns: list[Turn]) -> str:
         # Default: the current message. Context-augment with recent turns so

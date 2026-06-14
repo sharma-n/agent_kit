@@ -63,13 +63,15 @@ src/agent_kit/
   config/      schema.py (dataclass tree) + loader.py (YAML + ${VAR}; nested llm_kit block)
   stores/      base.py (4 Protocols) · types.py (records) · memory_*.py (in-memory adapters)
                · stubs.py (real adapters, NotImplementedError) · factory.py (backend select)
-  memory/      working.py · episodic.py · factual.py   (cognition over the stores)
+  memory/      working.py (buffer + token-budget rollover) · episodic.py (conversation-end
+               embed) · factual.py   (cognition over the stores)
   tools/       base.py (Tool) · registry.py (user-scoped exec) · native.py · mcp.py (stub)
   agent/       events.py (AgentEvent) · context.py (assembly §6.2) · budgeter.py (tiers §6.5)
-               · loop.py (run_turn §5)
+               · loop.py (run_turn §5 + end_conversation)
   serving/     wire.py (AgentEvent→frame) · app.py (FastAPI ws + sse)
   service.py   composition root: config → stores → memory → tools → agent
   llm.py       LLM / Embedder Protocols over llm_kit
+  tokens.py    estimate_tokens — leaf estimator shared by memory/ rollover + agent/ budgeter
   errors.py    AgentKitError hierarchy (reuse llm_kit.LLMError for provider failures)
 examples/      single_turn.py (direct) · ws_client.py (over server)
 tests/         conftest.py (FakeLLM/FakeEmbedder + make_service) + per-layer tests
@@ -92,6 +94,26 @@ config.yaml    one global config; agent_kit sections + nested llm_kit block
 - **Context budgeter** evicts by tier: tier-0 (system/current msg/tool defs) never
   drops (→ `ContextOverflowError`); working buffer evicts oldest; episodic drops
   lowest score.
+
+## Memory design decisions
+
+- **Rolling-summary rollover is token-budget-driven** (`WorkingMemory.maybe_rollover`).
+  When the verbatim buffer exceeds `WorkingMemoryConfig.buffer_token_budget`, the
+  oldest turns are folded into the rolling summary (LLM `invoke` + `RolledSummary`
+  response model) and dropped; the newest turns within budget stay. The trigger is
+  token-driven (not a fixed turn count) so it holds regardless of turn size. It runs
+  **off the hot path** — the loop enqueues it after `TurnComplete` — and is a safe
+  no-op (no turns lost) when there's no LLM, nothing to evict, or the summarizer
+  returns nothing usable. Sizing uses the shared `tokens.estimate_tokens`.
+
+- **Episodic embedding is per-conversation, not per-turn** (`EpisodicMemory.write_conversation`,
+  triggered by `Agent.end_conversation`). At conversation end the rolling summary +
+  remaining buffer are embedded as ONE point — cheaper and more compact than per-turn,
+  trading per-turn recall precision for conversation-level memory. `end_conversation`
+  is best-effort (missing/expired session or non-owner caller → no-op). It is wired to
+  **WebSocket disconnect** in `serving/app.py`; **SSE has no disconnect signal**, so
+  SSE-only conversations are not yet finalized (an idle-TTL close hook is the planned
+  fix — see ROADMAP M6). If finer recall is later needed, revisit to per-N-turns/hybrid.
 
 ## llm_kit gotchas (verified against the installed package)
 

@@ -42,7 +42,10 @@ class AgentConfig:
 @dataclass(slots=True)
 class WorkingMemoryConfig:
     buffer_turns: int = 12
-    summary_trigger: int = 16
+    # Rollover is token-budget-driven (not a fixed turn count): when the buffer's
+    # estimated size exceeds this, the oldest turns are summarized into the rolling
+    # summary and dropped. Keeps the verbatim buffer bounded regardless of turn size.
+    buffer_token_budget: int = 2048
     ttl_s: int = 3600
 
 
