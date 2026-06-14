@@ -43,6 +43,14 @@ class FactualMemory:
         """Tool-driven write: the most reliable capture path (SPEC §8)."""
         await self._store.upsert_facts(user_id, {key: value})
 
+    async def forget(self, user_id: str, key: str) -> bool:
+        """Tool-driven delete. Returns whether the fact existed before removal."""
+        profile = await self._store.get(user_id)
+        existed = key in profile.facts
+        if existed:
+            await self._store.forget_facts(user_id, {key})
+        return existed
+
     async def extract(self, user_id: str, user_text: str, assistant_text: str) -> None:
         """Post-turn extraction of durable facts (off the hot path)."""
         if not self._cfg.extraction_enabled or self._llm is None:

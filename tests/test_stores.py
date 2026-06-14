@@ -43,6 +43,17 @@ async def test_profile_upsert_merges():
     assert profile.facts == {"seat": "aisle", "tz": "PST"}
 
 
+async def test_profile_forget_removes_keys_and_ignores_missing():
+    store = InMemoryProfileStore()
+    await store.upsert_facts("alice", {"seat": "aisle", "tz": "PST"})
+    # Deleting a present key removes it; a missing key is a silent no-op.
+    await store.forget_facts("alice", {"seat", "nonexistent"})
+    profile = await store.get("alice")
+    assert profile.facts == {"tz": "PST"}
+    # Forgetting against an unknown user is also a no-op (does not raise).
+    await store.forget_facts("bob", {"seat"})
+
+
 async def test_vector_search_is_user_isolated():
     store = InMemoryVectorStore()
     await store.add(

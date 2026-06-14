@@ -61,6 +61,10 @@ class ProfileStore(Protocol):
 
     async def upsert_facts(self, user_id: str, facts: dict) -> None: ...
 
+    async def forget_facts(self, user_id: str, keys: set[str]) -> None:
+        """Delete the named facts. A no-op for keys that are absent."""
+        ...
+
 
 @runtime_checkable
 class VectorStore(Protocol):
@@ -86,3 +90,9 @@ class PermissionStore(Protocol):
     async def grant(self, user_id: str, tools: set[str]) -> None: ...
 
     async def revoke(self, user_id: str, tools: set[str]) -> None: ...
+
+    async def extend_default_allowed(self, names: set[str]) -> None:
+        """Fold ``names`` into the global default allowlist (the fallback for users
+        with no explicit grant). Used at startup for ``auto_allow`` MCP servers.
+        """
+        ...

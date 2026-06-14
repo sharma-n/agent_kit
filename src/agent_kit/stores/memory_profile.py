@@ -24,3 +24,12 @@ class InMemoryProfileStore:
         profile = await self.get(user_id)
         profile.facts.update(facts)
         profile.updated_at = time.time()
+
+    async def forget_facts(self, user_id: str, keys: set[str]) -> None:
+        profile = await self.get(user_id)
+        removed = False
+        for key in keys:
+            if profile.facts.pop(key, None) is not None:
+                removed = True
+        if removed:
+            profile.updated_at = time.time()

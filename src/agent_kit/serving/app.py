@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 def create_app(service: AgentService) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Connect configured MCP servers and register their discovered tools before
+        # serving any turns.
+        await service.astart()
         # Background idle sweeper: finalizes conversations that have gone idle past
         # ``idle_finalize_s``. This is the transport-agnostic conversation-end signal
         # — SSE never disconnects and WebSockets can drop without firing their handler.
@@ -48,6 +51,8 @@ def create_app(service: AgentService) -> FastAPI:
             sweeper.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await sweeper
+            # Drain background writes, close MCP connections + the shared HTTP client.
+            await service.aclose()
 
     app = FastAPI(title="agent_kit", lifespan=lifespan)
 

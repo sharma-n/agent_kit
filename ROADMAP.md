@@ -74,9 +74,18 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⬜ not started
 
 ### 🟡 M5 — Tools / MCP
 - ✅ `ToolRegistry` (user-scoped definitions + execute, timeout, truncation),
-  native `remember_fact` / `recall`, loop integration, safety rails.
-- ⬜ Real MCP client (`tools/mcp.py` is a `NotImplementedError` stub): multi-server
-  connect, tool discovery, namespacing by server, invocation, timeout handling.
+  native factual tools `remember_fact` / `forget_fact` / `list_facts` and episodic
+  `recall`, loop integration, safety rails.
+- ✅ Real MCP client (`tools/mcp.py`): operators bring their own MCP servers
+  (stdio / streamable-HTTP / SSE). `MCPServerClient` connects + discovers; `MCPManager`
+  aggregates across servers, **best-effort** (a server that fails to connect within
+  `mcp.startup_timeout_s` is logged and skipped). Discovered tools are wrapped as plain
+  `Tool`s and registered into the existing registry, namespaced `{server}__{tool}`
+  (double underscore — provider-safe + collision-safe vs single `_`). Connection
+  lifecycle runs in `AgentService.astart()` / `aclose()`, driven from the serving
+  lifespan. Permissions stay per-user: discovered tools are unreachable until
+  allowlisted, with an opt-in per-server `auto_allow` that folds a trusted server's
+  tools into the default allowlist (`PermissionStore.extend_default_allowed`).
 - ⬜ Curated/relevant tool-subset selection per turn (§6.3) to avoid sending 100
   tools every iteration.
 

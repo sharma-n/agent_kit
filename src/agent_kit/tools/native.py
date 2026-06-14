@@ -42,6 +42,47 @@ def remember_fact_tool(factual: FactualMemory) -> Tool:
     )
 
 
+def forget_fact_tool(factual: FactualMemory) -> Tool:
+    async def handler(user_id: str, args: dict[str, Any]) -> str:
+        key = str(args.get("key", ""))
+        if not key:
+            return "error: 'key' is required"
+        existed = await factual.forget(user_id, key)
+        return f"forgot: {key}" if existed else f"no such fact: {key}"
+
+    return Tool(
+        definition=ToolDefinition(
+            name="forget_fact",
+            description="Delete a previously remembered fact about the user by its key.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "The fact name to remove."},
+                },
+                "required": ["key"],
+            },
+        ),
+        handler=handler,
+    )
+
+
+def list_facts_tool(factual: FactualMemory) -> Tool:
+    async def handler(user_id: str, args: dict[str, Any]) -> str:
+        profile = await factual.get(user_id)
+        if not profile.facts:
+            return "no facts stored"
+        return "\n".join(f"- {k}: {v}" for k, v in profile.facts.items())
+
+    return Tool(
+        definition=ToolDefinition(
+            name="list_facts",
+            description="List all durable facts currently remembered about the user.",
+            parameters={"type": "object", "properties": {}},
+        ),
+        handler=handler,
+    )
+
+
 def recall_tool(episodic: EpisodicMemory) -> Tool:
     async def handler(user_id: str, args: dict[str, Any]) -> str:
         query = str(args.get("query", ""))

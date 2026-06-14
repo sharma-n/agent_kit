@@ -112,10 +112,15 @@ def make_service(
     *,
     invoke_parsed: BaseModel | None = None,
     extra_tools=None,
+    mcp_clients=None,
 ) -> tuple[AgentService, FakeLLM]:
     llm = FakeLLM(turns=turns, invoke_parsed=invoke_parsed)
     service = AgentService.build(
-        cfg, llm=llm, embedder=FakeEmbedder(), extra_tools=extra_tools
+        cfg,
+        llm=llm,
+        embedder=FakeEmbedder(),
+        extra_tools=extra_tools,
+        mcp_clients=mcp_clients,
     )
     return service, llm
 

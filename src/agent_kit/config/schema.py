@@ -155,11 +155,27 @@ class McpServerConfig:
     command: str | None = None
     url: str | None = None
     args: list[str] = field(default_factory=list)
+    # When true, this server's discovered tools are folded into the global default
+    # allowlist at startup — a convenience for trusted servers. Off by default:
+    # discovered tools are otherwise unreachable until explicitly granted per-user.
+    auto_allow: bool = False
 
 
 @dataclass(slots=True)
 class McpConfig:
     servers: list[McpServerConfig] = field(default_factory=list)
+    # Per-server cap on connect + tool discovery at startup; a server that exceeds it
+    # is logged and skipped rather than stalling the whole service.
+    startup_timeout_s: float = 30.0
+
+    def __post_init__(self) -> None:
+        names = [s.name for s in self.servers]
+        if len(names) != len(set(names)):
+            dupes = sorted({n for n in names if names.count(n) > 1})
+            raise ValueError(
+                f"mcp: server names must be unique (tool namespacing depends on it); "
+                f"duplicates: {', '.join(dupes)}"
+            )
 
 
 @dataclass(slots=True)

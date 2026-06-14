@@ -65,13 +65,15 @@ src/agent_kit/
                · stubs.py (real adapters, NotImplementedError) · factory.py (backend select)
   memory/      working.py (buffer + token-budget rollover) · episodic.py (conversation-end
                embed) · factual.py   (cognition over the stores)
-  tools/       base.py (Tool) · registry.py (user-scoped exec) · native.py · mcp.py (stub)
+  tools/       base.py (Tool) · registry.py (user-scoped exec) · native.py
+               · mcp.py (MCPServerClient connect/discover + MCPManager aggregate)
   agent/       events.py (AgentEvent) · context.py (assembly §6.2) · budgeter.py (tiers §6.5)
                · loop.py (run_turn §5 + end_conversation)
   serving/     wire.py (AgentEvent→frame) · app.py (FastAPI ws + sse)
   service.py   composition root: config → stores → memory → tools → agent
   llm.py       LLM / Embedder Protocols over llm_kit
   tokens.py    estimate_tokens — leaf estimator shared by memory/ rollover + agent/ budgeter
+  retry.py     retry_async / store_write — exp backoff + jitter for store-write retries
   errors.py    AgentKitError hierarchy (reuse llm_kit.LLMError for provider failures)
 examples/      single_turn.py (direct) · ws_client.py (over server)
 tests/         conftest.py (FakeLLM/FakeEmbedder + make_service) + per-layer tests
@@ -125,6 +127,15 @@ config.yaml    one global config; agent_kit sections + nested llm_kit block
   cadence `sweep_interval_s`). The sweeper is what gives **SSE** — which has no
   disconnect signal — a conversation-end event, and also catches abrupt WS drops.
 
+- **Background writes are fire-and-forget with logging + retry** — `extract`, `maybe_rollover`,
+  `mark_finalized`, and `write_conversation` are enqueued via `Agent._enqueue()` and run
+  off the hot path. A failure is no longer silent: `_guard()` logs one ERROR with
+  operation + `user_id` + `conversation_id`; `sweep_idle` logs per-conversation WARNING
+  and continues (no cascade). Store-write retries (via `retry.store_write()`) wrap **only**
+  the store call, not the preceding LLM/embedder step — that's already retried by llm_kit,
+  so a transient store fault never re-runs the model. Tunable via `MemoryConfig.store_retry`.
+  All background store ops are verified idempotent (except append-only `append_turn`).
+
 ## llm_kit gotchas (verified against the installed package)
 
 - `TokenUsage` is **not** re-exported from top-level `llm_kit`; import from
@@ -134,11 +145,29 @@ config.yaml    one global config; agent_kit sections + nested llm_kit block
 - `LLMClient` and `OpenAICompatibleEmbedder` both accept `client=` and
   `owns_client=` — `service.py` builds one shared `httpx.AsyncClient` for both.
 
+## MCP gotchas (verified against `mcp` 1.27.x)
+
+- The `mcp` SDK is the **optional `mcp` extra**; `tools/mcp.py` imports it **lazily
+  inside `connect()`** so the module loads without the extra (matches `stores/stubs.py`).
+- Transport clients are async context managers with **different return arities**:
+  `stdio_client` / `sse_client` yield `(read, write)`; `streamablehttp_client` yields
+  `(read, write, get_session_id)`. `MCPServerClient` holds them open in an
+  `AsyncExitStack` for the app's lifetime (they aren't one-shot calls).
+- `ClientSession` requires `await session.initialize()` before `list_tools()` /
+  `call_tool()`. A tool's `inputSchema` is already JSON Schema → drops straight into
+  `ToolDefinition.parameters`.
+- `call_tool` returns a `CallToolResult` with `content` (text blocks) and `isError`.
+  agent_kit **raises** on `isError=True` so the registry yields `ToolResult(ok=False)`
+  (tool errors are observations, not exceptions).
+- MCP connect/discover is async, so it can't run in the **sync** `service.build()`;
+  it runs in `AgentService.astart()` (called from the serving lifespan / examples).
+  Native tools are wired in `build()`; MCP tools `register()` later in `astart()`.
+
 ## Running things
 
 ```bash
-uv sync --extra dev                 # use --native-tls on this machine
-uv run pytest                       # 25 tests, no network/Docker
+uv sync --extra dev --extra mcp     # use --native-tls on this machine
+uv run pytest                       # 63 tests, no network/Docker
 OPENAI_API_KEY=... uv run python examples/single_turn.py
 OPENAI_API_KEY=... uv run uvicorn "agent_kit.serving.app:create_app_from_yaml" --factory
 ```

@@ -35,6 +35,7 @@ async def say(service: AgentService, message: str) -> None:
 
 async def main() -> None:
     service = AgentService.from_yaml("config.yaml")
+    await service.astart()  # connect any configured MCP servers + register their tools
     try:
         await say(service, "Hi! Remember that I prefer aisle seats.")
         await say(service, "What seat do I prefer again?")

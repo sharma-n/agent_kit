@@ -27,7 +27,13 @@ from agent_kit.memory.working import WorkingMemory
 from agent_kit.retry import RetryPolicy
 from agent_kit.stores.factory import Stores, build_stores
 from agent_kit.tools.base import Tool
-from agent_kit.tools.native import recall_tool, remember_fact_tool
+from agent_kit.tools.mcp import McpClient, MCPManager
+from agent_kit.tools.native import (
+    forget_fact_tool,
+    list_facts_tool,
+    recall_tool,
+    remember_fact_tool,
+)
 from agent_kit.tools.registry import ToolRegistry
 
 
@@ -36,6 +42,8 @@ class AgentService:
     cfg: AgentKitConfig
     stores: Stores
     agent: Agent
+    registry: ToolRegistry
+    mcp: MCPManager
     _aclose: object = None  # callable cleanup, set by build()
 
     @classmethod
@@ -50,6 +58,7 @@ class AgentService:
         llm: LLM | None = None,
         embedder: Embedder | None = None,
         extra_tools: list[Tool] | None = None,
+        mcp_clients: list[McpClient] | None = None,
     ) -> Self:
         """Assemble the service. Inject ``llm``/``embedder`` for tests; otherwise
         the real llm_kit clients are built over one shared HTTP session."""
@@ -89,11 +98,23 @@ class AgentService:
             stores.profile, cfg.memory.factual, llm=llm, store_retry=store_retry
         )
 
-        tools: list[Tool] = [remember_fact_tool(factual), recall_tool(episodic)]
+        tools: list[Tool] = [
+            remember_fact_tool(factual),
+            forget_fact_tool(factual),
+            list_facts_tool(factual),
+            recall_tool(episodic),
+        ]
         if extra_tools:
             tools.extend(extra_tools)
         registry = ToolRegistry(
             tools, stores.permissions, per_tool_timeout_s=cfg.agent.per_tool_timeout_s
+        )
+        # MCP servers are connected lazily in ``astart`` (an async step build() can't
+        # await); discovered tools are registered then.
+        mcp = MCPManager(
+            cfg.mcp.servers,
+            startup_timeout_s=cfg.mcp.startup_timeout_s,
+            clients=mcp_clients,
         )
 
         builder = ContextBuilder(
@@ -108,10 +129,25 @@ class AgentService:
 
         async def _aclose() -> None:
             await agent.drain()
+            await mcp.aclose()
             for close in cleanups:
                 await close()
 
-        return cls(cfg=cfg, stores=stores, agent=agent, _aclose=_aclose)
+        return cls(
+            cfg=cfg, stores=stores, agent=agent, registry=registry, mcp=mcp, _aclose=_aclose
+        )
+
+    async def astart(self) -> None:
+        """Connect configured MCP servers and register their discovered tools.
+
+        Idempotent enough for the common path (no servers → no-op). Call once after
+        ``build`` and before serving turns; the serving lifespan does this.
+        """
+        tools, auto_allowed = await self.mcp.start()
+        for tool in tools:
+            self.registry.register(tool)
+        if auto_allowed:
+            await self.stores.permissions.extend_default_allowed(auto_allowed)
 
     async def aclose(self) -> None:
         if callable(self._aclose):

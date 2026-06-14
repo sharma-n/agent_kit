@@ -27,3 +27,8 @@ class InMemoryPermissionStore:
     async def revoke(self, user_id: str, tools: set[str]) -> None:
         current = self._grants.setdefault(user_id, set(self._default))
         current.difference_update(tools)
+
+    async def extend_default_allowed(self, names: set[str]) -> None:
+        # Grows the fallback set for users without an explicit grant. Called at
+        # startup (before any per-user grants exist) for auto_allow MCP servers.
+        self._default.update(names)

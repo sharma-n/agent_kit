@@ -16,6 +16,11 @@ sequenceDiagram
     participant Registry as tools/registry.py<br/>ToolRegistry
     participant LLM as llm.py / llm_kit<br/>invoke_stream()
 
+    rect rgb(235, 245, 235)
+        note over Transport,Registry: Startup (once) — serving lifespan
+        Transport->>Registry: astart(): connect MCP servers, register discovered tools<br/>(namespaced {server}__{tool}; auto_allow → default allowlist)
+    end
+
     User->>Transport: send message (user_id, conversation_id, text)
 
     Transport->>Agent: run_turn(user_id, conversation_id, message)
@@ -77,6 +82,12 @@ sequenceDiagram
 
 ## Stage Breakdown
 
+### 0. Startup (once, at app boot) — `serving/app.py` lifespan
+
+Before any turn is served, the FastAPI **lifespan** calls `AgentService.astart()`, which connects every configured MCP server (`mcp.servers` in `config.yaml`) via `tools/mcp.py` (`MCPManager` → `MCPServerClient`), discovers each server's tools, and **registers** them into the same `ToolRegistry` the native tools live in — namespaced `{server}__{tool}`. This is best-effort: a server that fails to connect within `mcp.startup_timeout_s` is logged and skipped, never blocking startup. A trusted server marked `auto_allow: true` has its discovered tools folded into the global default allowlist here. The lifespan also starts the idle sweeper and, on shutdown, calls `AgentService.aclose()` to drain background writes and close MCP + HTTP connections.
+
+The upshot for the per-turn flow below: by the time a message arrives, MCP tools are just ordinary entries in the registry — indistinguishable from native tools at every stage that follows.
+
 ### 1. Entry Point — `serving/app.py`
 
 The client connects via **WebSocket** (`/ws/{conversation_id}`) or **SSE** (`/sse/{conversation_id}`). Both transports parse `user_id` and `message` from the client payload and delegate to `Agent.run_turn()`. Events yielded by the loop are encoded to JSON frames by `serving/wire.py` and streamed back as they arrive — `TextDelta`s are forwarded immediately, so the user sees text before the turn completes.
@@ -91,7 +102,7 @@ Before the first LLM call, `ContextBuilder.build()` fetches and assembles five s
 | Rolling summary | `SessionStore` | Compressed summary of earlier turns |
 | Factual profile | `ProfileStore` | Known facts about this user |
 | Episodic hits | `VectorStore` | Semantically relevant past memories |
-| Tool definitions | `PermissionStore` | Only the tools this user is allowed to see |
+| Tool definitions | `PermissionStore` | Only the tools this user is allowed to see (native **and** MCP-discovered, filtered by the per-user allowlist) |
 
 The assembled message list follows the order defined in SPEC §6.2:
 ```
@@ -116,6 +127,8 @@ Tool errors are **observations, not exceptions** — a failed, denied, or timed-
 ### 4. Tool Execution — `tools/registry.py`
 
 `ToolRegistry.execute()` enforces a two-layer permission check (definition-time filter + execute-time re-check), applies a per-tool timeout, and wraps every failure mode into an `Execution(ok=False)`.
+
+Native and MCP tools execute through the **same** path. A native tool runs its in-process handler; an MCP tool's handler forwards the call to its server's `MCPServerClient.call()` (`tools/mcp.py`), which invokes the remote/subprocess tool and joins the result's text. An MCP server returning `isError` is raised inside the handler so it lands as a `ToolResult(ok=False)` observation — same as any other tool failure. The per-tool timeout covers the round-trip to the MCP server too.
 
 ### 5. Persist — `agent/loop.py` (`_persist`)
 
@@ -150,7 +163,8 @@ When a conversation ends, `Agent.end_conversation()` reads the rolling summary +
 
 | Stage | File |
 |---|---|
-| Entry point (WS/SSE) | `src/agent_kit/serving/app.py` |
+| Startup wiring (composition root, `astart`/`aclose`) | `src/agent_kit/service.py` |
+| Entry point (WS/SSE) + lifespan (MCP connect, idle sweep) | `src/agent_kit/serving/app.py` |
 | Agent loop | `src/agent_kit/agent/loop.py` |
 | Context assembly | `src/agent_kit/agent/context.py` |
 | Token budget / eviction | `src/agent_kit/agent/budgeter.py` |
@@ -159,5 +173,7 @@ When a conversation ends, `Agent.end_conversation()` reads the rolling summary +
 | Token estimator (shared) | `src/agent_kit/tokens.py` |
 | Factual memory (profile) | `src/agent_kit/memory/factual.py` |
 | Tool execution + authz | `src/agent_kit/tools/registry.py` |
+| Native tools (`remember_fact` / `forget_fact` / `list_facts` / `recall`) | `src/agent_kit/tools/native.py` |
+| MCP client (connect / discover / invoke external servers) | `src/agent_kit/tools/mcp.py` |
 | Event types streamed out | `src/agent_kit/agent/events.py` |
 | Wire encoding to JSON | `src/agent_kit/serving/wire.py` |

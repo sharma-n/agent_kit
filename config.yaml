@@ -42,12 +42,28 @@ stores:
     collection: episodic_memory
 
 mcp:
+  # Bring your own MCP servers. Discovered tools are namespaced `{server}__{tool}`.
+  # By default a discovered tool is unreachable until allowlisted (per-user grant or
+  # `tools.default_allowed`); set `auto_allow: true` on a trusted server to fold its
+  # tools into the default allowlist at startup. A server that fails to connect within
+  # `startup_timeout_s` is logged and skipped (the rest still load).
+  startup_timeout_s: 30.0
   servers: []
+    # - name: filesystem            # local stdio subprocess
+    #   transport: stdio
+    #   command: npx
+    #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+    #   auto_allow: true
+    # - name: search                # remote streamable HTTP
+    #   transport: http
+    #   url: ${SEARCH_MCP_URL:-http://localhost:9000/mcp}
 
 tools:
   # Global fallback allowlist for users with no per-user grant in the store.
   default_allowed:
     - remember_fact
+    - forget_fact
+    - list_facts
     - recall
 
 # Nested block handed wholesale to llm_kit's AppConfig.
