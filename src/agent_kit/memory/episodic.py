@@ -120,10 +120,7 @@ class EpisodicMemory:
 
         resp = await self._llm.invoke(
             [
-                Message.system(
-                    "Rewrite the user's text into a single standalone search query "
-                    "that resolves pronouns and ellipsis. Return only the query."
-                ),
+                Message.system(self._cfg.query_rewrite_system_prompt),
                 Message.user(text),
             ],
             response_model=StandaloneQuery,

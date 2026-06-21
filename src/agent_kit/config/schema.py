@@ -37,6 +37,9 @@ class AgentConfig:
     per_tool_timeout_s: float = 30.0
     per_turn_budget_s: float | None = None
     system_prompt: str = "You are a helpful assistant."
+    factual_block_header: str = "What you know about this user:"
+    episodic_block_header: str = "Relevant memories from past conversations:"
+    summary_block_header: str = "Summary of earlier in this conversation:"
 
 
 @dataclass(slots=True)
@@ -46,6 +49,11 @@ class WorkingMemoryConfig:
     # estimated size exceeds this, the oldest turns are summarized into the rolling
     # summary and dropped. Keeps the verbatim buffer bounded regardless of turn size.
     buffer_token_budget: int = 2048
+    rollover_system_prompt: str = (
+        "You maintain a running summary of a conversation. Fold the new "
+        "turns into the existing summary, preserving durable facts, "
+        "decisions, and open threads. Return only the updated summary."
+    )
     # Two-stage idle lifecycle (must satisfy idle_finalize_s < ttl_s):
     #   idle_finalize_s — after this much idle, the conversation is *finalized*
     #     (embedded as one episodic point) but the session is kept loadable so the
@@ -73,11 +81,20 @@ class EpisodicMemoryConfig:
     min_score: float = 0.3
     query_augment_turns: int = 2
     query_rewrite: bool = False
+    query_rewrite_system_prompt: str = (
+        "Rewrite the user's text into a single standalone search query "
+        "that resolves pronouns and ellipsis. Return only the query."
+    )
 
 
 @dataclass(slots=True)
 class FactualMemoryConfig:
     extraction_enabled: bool = True
+    extraction_system_prompt: str = (
+        "Extract durable facts about the user worth remembering "
+        "long-term (preferences, identity, stable context). Return a "
+        "flat key/value map; omit anything ephemeral."
+    )
 
 
 @dataclass(slots=True)

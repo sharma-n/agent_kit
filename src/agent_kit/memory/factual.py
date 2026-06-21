@@ -59,11 +59,7 @@ class FactualMemory:
 
         resp = await self._llm.invoke(
             [
-                Message.system(
-                    "Extract durable facts about the user worth remembering "
-                    "long-term (preferences, identity, stable context). Return a "
-                    "flat key/value map; omit anything ephemeral."
-                ),
+                Message.system(self._cfg.extraction_system_prompt),
                 Message.user(f"User said: {user_text}\nAssistant said: {assistant_text}"),
             ],
             response_model=ExtractedFacts,

@@ -149,11 +149,7 @@ class WorkingMemory:
             return prior_summary
         resp = await self._llm.invoke(  # type: ignore[union-attr]
             [
-                Message.system(
-                    "You maintain a running summary of a conversation. Fold the new "
-                    "turns into the existing summary, preserving durable facts, "
-                    "decisions, and open threads. Return only the updated summary."
-                ),
+                Message.system(self._cfg.rollover_system_prompt),
                 Message.user(
                     f"Existing summary:\n{prior_summary or '(none)'}\n\n"
                     f"New turns to fold in:\n{transcript}"

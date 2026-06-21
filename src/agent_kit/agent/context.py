@@ -74,7 +74,7 @@ class ContextBuilder:
                     system_fixed=self.agent_cfg.system_prompt,
                     current_message=user_message,
                     tool_text=tool_text,
-                    factual_block=_format_factual(profile),
+                    factual_block=_format_factual(profile, self.agent_cfg.factual_block_header),
                     buffer=snapshot.buffer,
                     summary=snapshot.summary,
                     episodic=hits,
@@ -83,8 +83,8 @@ class ContextBuilder:
 
             # --- assemble in §6.2 order ---
             system_text = self._compose_system(
-                _format_factual(profile),
-                _format_episodic(budget.episodic),
+                _format_factual(profile, self.agent_cfg.factual_block_header),
+                _format_episodic(budget.episodic, self.agent_cfg.episodic_block_header),
                 budget.summary,
             )
             messages: list[Message] = [Message.system(system_text)]
@@ -116,22 +116,22 @@ class ContextBuilder:
         if episodic:
             parts.append(episodic)
         if summary:
-            parts.append(f"Summary of earlier in this conversation:\n{summary}")
+            parts.append(f"{self.agent_cfg.summary_block_header}\n{summary}")
         return "\n\n".join(parts)
 
 
-def _format_factual(profile: UserProfile) -> str:
+def _format_factual(profile: UserProfile, header: str) -> str:
     if not profile.facts:
         return ""
     lines = "\n".join(f"- {k}: {v}" for k, v in profile.facts.items())
-    return f"What you know about this user:\n{lines}"
+    return f"{header}\n{lines}"
 
 
-def _format_episodic(hits: list[MemoryHit]) -> str:
+def _format_episodic(hits: list[MemoryHit], header: str) -> str:
     if not hits:
         return ""
     lines = "\n".join(f"- {h.point.payload.get('text', '')}" for h in hits)
-    return f"Relevant memories from past conversations:\n{lines}"
+    return f"{header}\n{lines}"
 
 
 def _turn_to_message(turn: Turn) -> Message:
