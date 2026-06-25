@@ -227,23 +227,31 @@ Layering: keep `tools/registry.py` answering only "what is this user *allowed*";
 relevance ranking is a context-assembly concern (`agent/context.py` or a small
 `agent/tool_selector.py`), sitting upstream of the budgeter's tier-0.
 
-### ⬜ Episodic refinement: flagged moments within conversations
+### ✅ Episodic refinement: flagged moments within conversations
 **Rationale:** Per-conversation embedding (M6) trades per-turn recall for efficiency.
-But a 50-turn conversation embedded as one blob is searchable but noisy. When the
-agent later retrieves it, it re-reads everything to find one detail.
+But a 50-turn conversation embedded as one blob is searchable but noisy — a broad
+averaged vector may not surface well when a user asks about a specific topic within it.
 
-**Approach (future, when usage data justifies):**
-- At conversation-end embedding, let the model **flag 1–2 key moments** within the
-  conversation (e.g., "User stated their aisle-seat preference" at turn 5; "Booked
-  SFO→JFK flight" at turn 35).
-- Embed the whole conversation as the main point (current behavior), *plus* embed
-  each flagged moment as a sibling point, all tagged with the same `conversation_id`.
-- On retrieval, top-k could surface either the main conversation or a flagged moment,
-  improving recall *within* a conversation without per-turn noise.
+**Implemented approach:**
+- At conversation-end, the LLM identifies 1–`max_flagged_moments` notable **discussion
+  threads** (what the user was working through, problems explored, situations they were in)
+  — distinct from facts, which remain in factual memory.
+- The whole-conversation point is written as before (`kind="conversation"`). Each flagged
+  moment is embedded as a sibling point (`kind="moment"`, `parent_id=conv:{id}`,
+  deterministic ID `moment:{id}:{i}` → upserts on re-finalize).
+- Both kinds compete naturally in the same `top_k` search — no Protocol change.
+  The budgeter handles density via score-based eviction (moment texts are short, so
+  they cost fewer tokens and leave room for more results).
+- Off by default (`flagged_moments_enabled: false`); opt-in via config. Safe no-op
+  when `llm` is None. All moment writes use the existing `store_write` retry path.
+- **Guidance clarity also improved** (same PR): `remember_fact` / `recall` tool
+  descriptions now explicitly distinguish user attributes (factual) from discussion
+  topics (episodic); `extraction_system_prompt` tells the extractor not to emit
+  discussion context.
 
-**Trade-off:** More embedding API calls and Qdrant points per conversation, but
-cleaner signal than per-turn and finer recall than per-conversation-only. Revisit
-if real usage shows users struggle to find details in older conversations.
+**Trade-off:** 1–N extra embedding calls per conversation finalization (LLM invoke +
+embed per moment), all off the hot path. Qdrant/in-memory point count grows by at most
+`max_flagged_moments` per conversation. Tunable; 1–3 moments recommended.
 
 ---
 

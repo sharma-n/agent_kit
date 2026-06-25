@@ -30,6 +30,12 @@ memory:
     query_rewrite: false
     # System prompt for the query-rewrite step (only used when query_rewrite: true).
     # query_rewrite_system_prompt: "Rewrite the user's text into a single standalone search query ..."
+    # Flagged moments: embed notable discussion threads as sibling points alongside the
+    # whole-conversation point. Improves recall precision for specific topics without
+    # per-turn embedding noise. 1–3 moments per conversation is recommended.
+    # flagged_moments_enabled: false
+    # max_flagged_moments: 2
+    # flagged_moments_system_prompt: "You are given a conversation transcript. ..."
   factual:
     extraction_enabled: true
     # System prompt for post-turn fact extraction (only used when extraction_enabled: true).

@@ -7,7 +7,8 @@ Covers the two design decisions in ROADMAP/CLAUDE:
 
 from __future__ import annotations
 
-from agent_kit.config import AgentKitConfig, WorkingMemoryConfig
+from agent_kit.config import AgentKitConfig, EpisodicMemoryConfig, MemoryConfig, WorkingMemoryConfig
+from agent_kit.memory.episodic import FlaggedMoment, FlaggedMoments
 from agent_kit.memory.working import RolledSummary, WorkingMemory
 from agent_kit.stores.memory_session import InMemorySessionStore
 from agent_kit.stores.types import SessionState, Turn
@@ -193,6 +194,119 @@ async def test_sweep_idle_finalizes_idle_sse_conversation():
     # A second sweep with no new activity must not re-embed.
     await service.agent.sweep_idle(idle_finalize_s=900)
     assert len(service.stores.vectors._points) == 1
+
+
+# ---------------------------------------------------- flagged moments (episodic)
+
+
+def _moments_cfg(n: int = 2) -> AgentKitConfig:
+    """Config with flagged moments enabled and a large token budget (no rollover)."""
+    return AgentKitConfig(
+        memory=MemoryConfig(
+            episodic=EpisodicMemoryConfig(
+                flagged_moments_enabled=True,
+                max_flagged_moments=n,
+            ),
+            working=WorkingMemoryConfig(buffer_token_budget=10_000),
+        )
+    )
+
+
+async def test_flagged_moments_disabled_writes_one_point():
+    """Default config (moments off) still writes exactly one conv: point."""
+    service, _ = make_service(
+        AgentKitConfig(), turns=[ScriptedTurn(text_chunks=["hi"])]
+    )
+    await _run(service.agent, msg="planning a trip to Japan")
+    await service.agent.end_conversation("alice", "c1")
+
+    points = list(service.stores.vectors._points.values())
+    assert len(points) == 1
+    assert points[0].payload["kind"] == "conversation"
+
+
+async def test_flagged_moments_writes_conv_plus_moment_points():
+    """With moments enabled and LLM returning 2 moments → 3 total points."""
+    two_moments = FlaggedMoments(
+        moments=[
+            FlaggedMoment(text="User was planning a trip to Japan for cherry blossom season."),
+            FlaggedMoment(text="User explored budget constraints of around 3000 USD."),
+        ]
+    )
+    service, _ = make_service(
+        _moments_cfg(2),
+        turns=[ScriptedTurn(text_chunks=["sounds fun"])],
+        invoke_parsed=two_moments,
+    )
+    await _run(service.agent, msg="planning a trip to Japan")
+    await service.agent.end_conversation("alice", "c1")
+
+    points = service.stores.vectors._points
+    assert len(points) == 3
+
+    conv_point = points["conv:c1"]
+    assert conv_point.payload["kind"] == "conversation"
+
+    moment_0 = points["moment:c1:0"]
+    assert moment_0.payload["kind"] == "moment"
+    assert moment_0.payload["parent_id"] == "conv:c1"
+    assert moment_0.payload["user_id"] == "alice"
+    assert "Japan" in moment_0.payload["text"]
+
+    moment_1 = points["moment:c1:1"]
+    assert moment_1.payload["kind"] == "moment"
+    assert "budget" in moment_1.payload["text"]
+
+
+async def test_flagged_moments_noop_without_llm():
+    """moments enabled but no LLM → safe no-op, only conv: point written."""
+    from agent_kit.memory.episodic import EpisodicMemory
+    from agent_kit.stores.memory_vectors import InMemoryVectorStore
+    from tests.conftest import FakeEmbedder
+
+    store = InMemoryVectorStore()
+    em = EpisodicMemory(
+        store,
+        FakeEmbedder(),
+        EpisodicMemoryConfig(flagged_moments_enabled=True, max_flagged_moments=2),
+        llm=None,
+    )
+    await em.write_conversation("alice", "c1", "", [Turn(role="user", text="hello")])
+
+    points = list(store._points.values())
+    assert len(points) == 1
+    assert points[0].payload["kind"] == "conversation"
+
+
+async def test_flagged_moments_idempotent_on_refinalize():
+    """Re-finalizing after resume upserts moments in place; total stays at 3."""
+    two_moments = FlaggedMoments(
+        moments=[
+            FlaggedMoment(text="User discussed Japan trip planning."),
+            FlaggedMoment(text="User explored budget of 3000 USD."),
+        ]
+    )
+    service, _ = make_service(
+        _moments_cfg(2),
+        turns=[ScriptedTurn(text_chunks=["great"]), ScriptedTurn(text_chunks=["sure"])],
+        invoke_parsed=two_moments,
+    )
+    await _run(service.agent, msg="trip to Japan")
+
+    # First finalize: 3 points (1 conv + 2 moment)
+    state = await service.stores.session.load("c1", "alice")
+    state.updated_at -= 1000
+    await service.agent.sweep_idle(idle_finalize_s=900)
+    assert len(service.stores.vectors._points) == 3
+
+    # User returns and sends another message.
+    await _run(service.agent, msg="also need flight options")
+
+    # Second finalize: same IDs upserted, still 3 points.
+    state = await service.stores.session.load("c1", "alice")
+    state.updated_at -= 1000
+    await service.agent.sweep_idle(idle_finalize_s=900)
+    assert len(service.stores.vectors._points) == 3
 
 
 async def test_resume_after_finalize_keeps_same_conversation():

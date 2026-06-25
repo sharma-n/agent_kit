@@ -116,11 +116,18 @@ config.yaml    one global config; agent_kit sections + nested llm_kit block
 
 - **Episodic embedding is per-conversation, not per-turn** (`EpisodicMemory.write_conversation`,
   triggered by `Agent.end_conversation`). At conversation end the rolling summary +
-  remaining buffer are embedded as ONE point — cheaper and more compact than per-turn,
-  trading per-turn recall precision for conversation-level memory. The point id is
-  deterministic (`conv:{conversation_id}`) so re-finalizing a resumed conversation
-  upserts rather than duplicating. If finer recall is later needed, revisit to
-  per-N-turns/hybrid.
+  remaining buffer are embedded as ONE `kind="conversation"` point — cheaper and more
+  compact than per-turn, trading per-turn recall precision for conversation-level memory.
+  The point id is deterministic (`conv:{conversation_id}`) so re-finalizing a resumed
+  conversation upserts rather than duplicating.
+
+  When `EpisodicMemoryConfig.flagged_moments_enabled` is true, the LLM additionally
+  identifies 1–`max_flagged_moments` notable **discussion threads** and embeds each as a
+  sibling `kind="moment"` point (`moment:{conversation_id}:{i}`). These compete naturally
+  with the conversation point in `top_k` search — no Protocol change, no context-assembly
+  change. This is the two-layer balance: the conversation point handles broad "what was
+  this conversation about?" recall; moment points handle precision recall for specific
+  topics. Off by default; safe no-op when `llm` is None.
 
 - **Conversation end is a two-stage idle lifecycle, not a single TTL** (config
   validates `idle_finalize_s < ttl_s`). `idle_finalize_s` fires first: the conversation
@@ -192,14 +199,18 @@ config.yaml    one global config; agent_kit sections + nested llm_kit block
 - **Streaming rule:** the `invoke_stream` wrapper must never buffer — it yields each
   `TextChunk` straight through (TTFT) and uses `start_observation`/`end()` (not a
   context manager held across `yield`s, which would shuffle the OTel current-span var).
-- **Traces only for now** — no Prometheus `/metrics` yet (that pillar is the remaining
-  M9 sub-task; the `/metrics` route is still a stub).
+- **Prometheus `/metrics`** — five instruments via `prometheus_client` (optional `metrics`
+  extra): `agent_kit_ttft_seconds`, `agent_kit_turn_latency_seconds`,
+  `agent_kit_turn_iterations`, `agent_kit_tool_calls_total` (labels `tool`+`outcome`),
+  `agent_kit_retrieval_hits`. Same seam pattern as `telemetry.py`: single `metrics.py`
+  leaf, no-op by default (`MetricsConfig.enabled=false`). `/metrics` returns 501 JSON
+  when disabled, Prometheus text format when enabled.
 
 ## Running things
 
 ```bash
 uv sync --extra dev --extra mcp --extra telemetry   # use --native-tls on this machine
-uv run pytest                       # 77 tests, no network/Docker
+uv run pytest                       # 108 tests, no network/Docker
 OPENAI_API_KEY=... uv run python examples/single_turn.py
 OPENAI_API_KEY=... uv run uvicorn "agent_kit.serving.app:create_app_from_yaml" --factory
 ```

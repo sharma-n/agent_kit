@@ -5,10 +5,19 @@ design, **per conversation rather than per turn**: the whole conversation (rolli
 summary + remaining buffer) is embedded as a single point when the conversation
 ends. This keeps the vector store compact and embedding cost low, trading per-turn
 recall precision for coarse-grained, conversation-level memory.
+
+When ``flagged_moments_enabled`` is set, the LLM additionally identifies 1–N
+notable discussion threads within the conversation and embeds each as a sibling
+point (``kind="moment"``). This improves recall precision for specific topics
+without per-turn embedding noise: the conversation point handles broad "what was
+this conversation about?" queries, while moment points answer "what specific topics
+did we work through?". Both kinds compete naturally in ``top_k`` search, with the
+budgeter handling density via score-based eviction.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 
 from pydantic import BaseModel
@@ -20,11 +29,25 @@ from agent_kit.stores.base import VectorStore
 from agent_kit.stores.types import MemoryHit, MemoryPoint, Turn
 from agent_kit import telemetry, metrics as _metrics
 
+_log = logging.getLogger(__name__)
+
 
 class StandaloneQuery(BaseModel):
     """Schema for the optional query-rewrite step (SPEC §6.4.3)."""
 
     query: str
+
+
+class FlaggedMoment(BaseModel):
+    """One notable discussion thread within a conversation."""
+
+    text: str
+
+
+class FlaggedMoments(BaseModel):
+    """LLM response model for flagged-moments extraction."""
+
+    moments: list[FlaggedMoment]
 
 
 class EpisodicMemory:
@@ -62,10 +85,13 @@ class EpisodicMemory:
         summary: str,
         turns: list[Turn],
     ) -> None:
-        """Embed a whole conversation as ONE episodic point (at conversation end).
+        """Embed a whole conversation as one episodic point (at conversation end).
 
         Composes the rolling summary + remaining buffer into a single transcript,
-        embeds it, and upserts one point. No-op for an empty conversation.
+        embeds it, and upserts one ``kind="conversation"`` point. When
+        ``flagged_moments_enabled`` is set, also extracts 1–N notable discussion
+        threads and upserts each as a sibling ``kind="moment"`` point. No-op for
+        an empty conversation.
         """
         text = self._compose(summary, turns)
         if not text:
@@ -93,6 +119,55 @@ class EpisodicMemory:
                 policy=self._store_retry,
                 operation="episodic.write_conversation",
             )
+
+            # Optional: embed notable discussion threads as sibling moment points.
+            moment_texts = await self._extract_moments(text)
+            if moment_texts:
+                ts = time.time()
+                moment_points: list[MemoryPoint] = []
+                for i, moment_text in enumerate(moment_texts):
+                    m_vector = (await self._embedder.embed_one(moment_text)).vector
+                    moment_points.append(
+                        MemoryPoint(
+                            # Deterministic index: re-finalize upserts rather than duplicates.
+                            id=f"moment:{conversation_id}:{i}",
+                            vector=m_vector,
+                            payload={
+                                "user_id": user_id,
+                                "conversation_id": conversation_id,
+                                "text": moment_text,
+                                "kind": "moment",
+                                "parent_id": f"conv:{conversation_id}",
+                                "ts": ts,
+                            },
+                        )
+                    )
+                await store_write(
+                    lambda: self._store.add(moment_points),
+                    policy=self._store_retry,
+                    operation="episodic.write_moments",
+                )
+
+    async def _extract_moments(self, text: str) -> list[str]:
+        """Return up to max_flagged_moments discussion-thread summaries, or [] on no-op."""
+        if not self._cfg.flagged_moments_enabled or self._llm is None:
+            return []
+        try:
+            from llm_kit import Message
+
+            prompt = self._cfg.flagged_moments_system_prompt.format(
+                max_moments=self._cfg.max_flagged_moments
+            )
+            resp = await self._llm.invoke(
+                [Message.system(prompt), Message.user(text)],
+                response_model=FlaggedMoments,
+            )
+            if resp.parsed is None:
+                return []
+            return [m.text for m in resp.parsed.moments][: self._cfg.max_flagged_moments]
+        except Exception:
+            _log.warning("episodic._extract_moments failed", exc_info=True)
+            return []
 
     @staticmethod
     def _compose(summary: str, turns: list[Turn]) -> str:

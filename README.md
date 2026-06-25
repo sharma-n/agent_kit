@@ -44,9 +44,14 @@ by score.
 - *Working* — recent turns + a rolling summary. When the buffer exceeds a token budget,
   the oldest turns are folded into the summary off the hot path.
 - *Episodic* — the whole conversation is embedded as one vector point at conversation
-  end, recalled by semantic similarity in future conversations.
-- *Factual* — a structured user profile, updated by explicit tool calls (`remember_fact`)
-  or by automatic extraction after each turn.
+  end, recalled by semantic similarity in future conversations. Optionally, the LLM also
+  flags 1–N notable discussion threads and embeds each as a sibling point, improving
+  recall precision for specific topics without per-turn embedding noise
+  (`flagged_moments_enabled` in config).
+- *Factual* — a structured key-value user profile (occupation, preferences, habits,
+  constraints, and any other timeless user attribute). Updated by explicit tool calls
+  (`remember_fact` to add/update, `forget_fact` to delete, `list_facts` to read) or by
+  automatic extraction after each turn.
 
 **Per-user tool permissions** — a `PermissionStore` gates which tools each user can
 see *and* execute (checked twice: at definition time and again at execution — defense
@@ -150,7 +155,9 @@ These aren't configurable — they're the point of the library:
 
 - **Episodic embedding is per-conversation, not per-turn.** The whole conversation
   (summary + remaining buffer) is embedded as one vector point at conversation end.
-  Cheaper and more compact; trades per-turn recall precision for embedding cost.
+  Cheaper and more compact; trades per-turn recall precision for embedding cost. An
+  optional `flagged_moments_enabled` mode adds focused sibling points for notable
+  discussion threads — the balance between a single broad blob and per-turn noise.
 
 - **Rollover is token-budget-driven, not turn-count-driven.** The trigger is the
   estimated token size of the working buffer, not a fixed number of turns.

@@ -28,7 +28,14 @@ def remember_fact_tool(factual: FactualMemory) -> Tool:
     return Tool(
         definition=ToolDefinition(
             name="remember_fact",
-            description="Persist a durable fact about the user for future conversations.",
+            description=(
+                "Store or update a durable fact about the user for future conversations. "
+                "Use this for anything timeless and true about the user: preferences, "
+                "occupation, habits, skills, location, dietary needs, constraints, or any "
+                "other stable attribute. Calling with the same key overwrites the previous "
+                "value, so this also serves as an update. Do not use for past discussion "
+                "topics or conversation context — those belong in episodic memory."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -53,7 +60,11 @@ def forget_fact_tool(factual: FactualMemory) -> Tool:
     return Tool(
         definition=ToolDefinition(
             name="forget_fact",
-            description="Delete a previously remembered fact about the user by its key.",
+            description=(
+                "Delete a fact about the user by its key. Use this when the user explicitly "
+                "asks to forget something, or when a fact is no longer true and should be "
+                "removed entirely rather than updated."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -98,7 +109,11 @@ def recall_tool(episodic: EpisodicMemory) -> Tool:
     return Tool(
         definition=ToolDefinition(
             name="recall",
-            description="Search the user's past conversations for relevant memories.",
+            description=(
+                "Search the user's past conversation topics and discussion threads for relevant "
+                "context. Use this to find past situations, problems the user worked through, or "
+                "topics explored — not to look up facts about the user (use list_facts for that)."
+            ),
             parameters={
                 "type": "object",
                 "properties": {

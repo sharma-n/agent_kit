@@ -85,6 +85,27 @@ class EpisodicMemoryConfig:
         "Rewrite the user's text into a single standalone search query "
         "that resolves pronouns and ellipsis. Return only the query."
     )
+    # When enabled, the LLM flags 1–max_flagged_moments notable discussion threads
+    # within each conversation at finalization time. Each is embedded as a sibling
+    # point (kind="moment") alongside the whole-conversation point, improving recall
+    # precision for specific topics without per-turn embedding noise.
+    flagged_moments_enabled: bool = False
+    max_flagged_moments: int = 2
+    flagged_moments_system_prompt: str = (
+        "You are given a conversation transcript. "
+        "Identify at most {max_moments} notable discussion threads or topics worth "
+        "preserving as searchable context for future conversations. "
+        "Focus on: what problems was the user working through, what topics were they "
+        "exploring, what situations or contexts were they in? "
+        "Write each moment as 1-2 self-contained sentences. You may include specific "
+        "facts when they are load-bearing for understanding the discussion context "
+        "(e.g. 'User was optimizing a frequent business travel routine, discussing "
+        "aisle seats and mileage programs'). Do not flag pure user preferences in "
+        "isolation — those belong in factual memory. Do not flag generic exchanges or "
+        "single-turn clarifications. "
+        "It is fine to return fewer than {max_moments} if the conversation has few "
+        "distinct threads."
+    )
 
 
 @dataclass(slots=True)
@@ -92,8 +113,10 @@ class FactualMemoryConfig:
     extraction_enabled: bool = True
     extraction_system_prompt: str = (
         "Extract durable facts about the user worth remembering "
-        "long-term (preferences, identity, stable context). Return a "
-        "flat key/value map; omit anything ephemeral."
+        "long-term (preferences, identity, stable constraints). Return a "
+        "flat key/value map; omit anything ephemeral. Do not extract "
+        "discussion topics, conversation context, or situations the user "
+        "was in — those belong to episodic memory, not factual memory."
     )
 
 
