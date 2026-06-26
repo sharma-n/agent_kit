@@ -229,10 +229,18 @@ class ToolPolicy:
     ``AgentConfig.per_tool_timeout_s``, ``rate_limit_per_minute`` to unlimited.
     Lets a deployment run a heterogeneous tool suite — fast local tools on a tight
     timeout, slow external APIs on a generous one, high-value tools rate-limited.
+
+    ``requires_approval=True`` pauses the agent loop before executing the tool and
+    emits a ``ToolApprovalRequired`` event.  Over WebSocket the client responds with
+    ``{"type": "approval", "call_id": ..., "approved": bool}``; over SSE the tool is
+    automatically denied (SSE is one-way).  ``approval_timeout_s`` caps how long the
+    loop waits before auto-denying.
     """
 
     timeout_s: float | None = None
     rate_limit_per_minute: int | None = None
+    requires_approval: bool = False
+    approval_timeout_s: float = 30.0
 
 
 @dataclass(slots=True)

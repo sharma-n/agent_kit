@@ -29,6 +29,7 @@ from agent_kit.agent.context import ContextBuilder
 from agent_kit.agent.events import (
     AgentEvent,
     TextDelta,
+    ToolApprovalRequired,
     ToolCallStarted,
     ToolResult,
     TurnComplete,
@@ -65,6 +66,7 @@ class Agent:
         self._factual = factual
         self._cfg = cfg
         self._bg_tasks: set[asyncio.Task] = set()
+        self._pending_approvals: dict[str, asyncio.Future[bool]] = {}
 
     async def run_turn(
         self, user_id: str, conversation_id: str, user_message: str
@@ -129,6 +131,38 @@ class Agent:
                     Message.assistant_tool_calls(tool_calls, text=response.text or None)
                 )
                 for call in tool_calls:
+                    policy = self._registry.get_policy(call.name)
+                    if policy and policy.requires_approval:
+                        fut: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+                        self._pending_approvals[call.id] = fut
+                        yield ToolApprovalRequired(
+                            call_id=call.id,
+                            name=call.name,
+                            arguments=call.arguments,
+                            timeout_s=policy.approval_timeout_s,
+                        )
+                        timed_out = False
+                        try:
+                            approved = await asyncio.wait_for(
+                                fut, timeout=policy.approval_timeout_s
+                            )
+                        except asyncio.TimeoutError:
+                            approved = False
+                            timed_out = True
+                        finally:
+                            self._pending_approvals.pop(call.id, None)
+                        if not approved:
+                            reason = (
+                                f"tool {call.name!r} — approval request timed out"
+                                if timed_out
+                                else f"tool {call.name!r} — user denied approval"
+                            )
+                            yield ToolResult(
+                                call_id=call.id, name=call.name, ok=False, content=reason
+                            )
+                            messages.append(Message.tool_result(call.id, reason))
+                            continue
+
                     yield ToolCallStarted(
                         call_id=call.id, name=call.name, arguments=call.arguments
                     )
@@ -186,6 +220,17 @@ class Agent:
             user_id=user_id,
             conversation_id=conversation_id,
         )
+
+    def resolve_approval(self, call_id: str, approved: bool) -> None:
+        """Resolve a pending tool-approval request from the serving layer.
+
+        Called by the WebSocket handler when the client sends an approval message,
+        or immediately by the SSE handler to auto-deny (SSE is one-way). A stale
+        or unknown ``call_id`` is silently ignored.
+        """
+        fut = self._pending_approvals.pop(call_id, None)
+        if fut and not fut.done():
+            fut.set_result(approved)
 
     async def end_conversation(self, user_id: str, conversation_id: str) -> None:
         """Embed the whole conversation as one episodic point and mark it finalized.

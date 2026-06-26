@@ -88,10 +88,10 @@ config.yaml    one global config; agent_kit sections + nested llm_kit block
 
 ## Key abstractions to know
 
-- **`AgentEvent`** (`agent/events.py`): `TextDelta | ToolCallStarted | ToolResult |
-  TurnComplete`. `run_turn` yields these; `serving/wire.py` encodes them to JSON
-  frames. This is the load-bearing abstraction — a streaming tool loop can't yield
-  bare tokens.
+- **`AgentEvent`** (`agent/events.py`): `TextDelta | ToolCallStarted |
+  ToolApprovalRequired | ToolResult | TurnComplete`. `run_turn` yields these;
+  `serving/wire.py` encodes them to JSON frames. This is the load-bearing abstraction
+  — a streaming tool loop can't yield bare tokens.
 - **The loop drives tools off `StreamEnd.response.tool_calls`.** `llm_kit`'s
   mid-stream `ToolCallStarted` is *name-only*; the assembled calls *with parsed
   arguments* arrive on `StreamEnd`. agent_kit emits its own `ToolCallStarted` (with
@@ -176,6 +176,30 @@ config.yaml    one global config; agent_kit sections + nested llm_kit block
   it runs in `AgentService.astart()` (called from the serving lifespan / examples).
   Native tools are wired in `build()`; MCP tools `register()` later in `astart()`.
 
+## HITL tool approval
+
+- **Config:** add `requires_approval: true` (and optionally `approval_timeout_s`,
+  default 30 s) to a tool's `ToolPolicy` under `tools.definitions` in `config.yaml`.
+- **Event flow:** the loop emits `ToolApprovalRequired(call_id, name, arguments,
+  timeout_s)` *before* executing the tool (before `ToolCallStarted`). On approval it
+  continues normally; on denial or timeout it emits `ToolResult(ok=False)` with a
+  human-readable reason and feeds that reason back to the model as a tool-result
+  observation, so the model can explain what happened to the user.
+- **WebSocket:** the WS handler runs two concurrent coroutines via `asyncio.gather` —
+  `_receive` (reads every incoming WS message) and `_run_turns` (drives the agent loop
+  from a queue). Approval responses arrive as
+  `{"type": "approval", "call_id": "…", "approved": true}` on the same connection;
+  `_receive` routes them to `Agent.resolve_approval()`, which resolves the
+  `asyncio.Future` the loop is awaiting.
+- **SSE:** one-way transport — the loop's future is resolved to `False` immediately
+  after the SSE handler yields the `ToolApprovalRequired` frame. The auto-deny appears
+  as a normal `ToolResult(ok=False)` in the stream.
+- **In-process caveat:** approval futures live in `Agent._pending_approvals` (in
+  process memory, same as the rate-limiter). In a multi-worker deploy the approval
+  response must reach the same worker as the running turn. WS connections are
+  typically sticky, so this is safe in practice; a shared-store backing is a later
+  scaling step if needed.
+
 ## Telemetry / tracing (Langfuse)
 
 - **One seam, one import.** `telemetry.py` is the *only* module that imports
@@ -210,7 +234,7 @@ config.yaml    one global config; agent_kit sections + nested llm_kit block
 
 ```bash
 uv sync --extra dev --extra mcp --extra telemetry   # use --native-tls on this machine
-uv run pytest                       # 108 tests, no network/Docker
+uv run pytest                       # 115 tests, no network/Docker
 OPENAI_API_KEY=... uv run python examples/single_turn.py
 OPENAI_API_KEY=... uv run uvicorn "agent_kit.serving.app:create_app_from_yaml" --factory
 ```

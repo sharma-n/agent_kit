@@ -18,6 +18,7 @@ __all__ = [
     "AgentEvent",
     "TextDelta",
     "ToolCallStarted",
+    "ToolApprovalRequired",
     "ToolResult",
     "TurnComplete",
 ]
@@ -44,6 +45,23 @@ class ToolCallStarted:
 
 
 @dataclass(slots=True)
+class ToolApprovalRequired:
+    """Pause: the agent needs human approval before executing this tool.
+
+    Over WebSocket: the client responds on the same connection with
+    ``{"type": "approval", "call_id": ..., "approved": true|false}``.
+    Over SSE: automatically denied (SSE is one-way).
+
+    If no response arrives within ``timeout_s`` the loop auto-denies.
+    """
+
+    call_id: str
+    name: str
+    arguments: dict
+    timeout_s: float
+
+
+@dataclass(slots=True)
 class ToolResult:
     """Optional UI trace of an observation.
 
@@ -65,4 +83,4 @@ class TurnComplete:
     stop_reason: str
 
 
-AgentEvent = TextDelta | ToolCallStarted | ToolResult | TurnComplete
+AgentEvent = TextDelta | ToolCallStarted | ToolApprovalRequired | ToolResult | TurnComplete

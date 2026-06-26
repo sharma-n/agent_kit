@@ -28,6 +28,7 @@ from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 
 from agent_kit import telemetry, metrics as _metrics
+from agent_kit.agent.events import ToolApprovalRequired
 from agent_kit.config import AgentKitConfig
 from agent_kit.errors import UnauthorizedError
 from agent_kit.service import AgentService
@@ -93,36 +94,59 @@ def create_app(service: AgentService) -> FastAPI:
     async def ws(websocket: WebSocket, conversation_id: str) -> None:
         await websocket.accept()
         last_user_id: str | None = None
-        try:
+        # Turn messages queue: _receive puts payloads here; _run_turns consumes them.
+        # None is the disconnect sentinel.
+        turn_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+        async def _receive() -> None:
+            nonlocal last_user_id
+            try:
+                while True:
+                    payload = json.loads(await websocket.receive_text())
+                    if payload.get("type") == "approval":
+                        # Route approval responses directly to the pending future in
+                        # the running turn — no queue needed, just resolve in place.
+                        service.agent.resolve_approval(
+                            payload["call_id"], bool(payload.get("approved"))
+                        )
+                    else:
+                        last_user_id = payload["user_id"]
+                        await turn_queue.put(payload)
+            except WebSocketDisconnect:
+                await turn_queue.put(None)  # wake _run_turns so it can exit
+
+        async def _run_turns() -> None:
             while True:
-                raw = await websocket.receive_text()
-                payload = json.loads(raw)
-                user_id = payload["user_id"]
-                last_user_id = user_id
-                message = payload["message"]
+                payload = await turn_queue.get()
+                if payload is None:
+                    break
                 try:
                     async for event in service.agent.run_turn(
-                        user_id, conversation_id, message
+                        payload["user_id"], conversation_id, payload["message"]
                     ):
                         await websocket.send_json(encode_event(event))
+                except WebSocketDisconnect:
+                    return
                 except UnauthorizedError as exc:
-                    await websocket.send_json({"type": "error", "error": str(exc)})
-        except WebSocketDisconnect:
-            # Conversation ended → embed it as one episodic point (off the hot path).
-            # Log a finalize failure here rather than let it surface as an unhandled
-            # task error; the idle sweeper is the backstop if this disconnect path fails.
-            if last_user_id is not None:
-                try:
-                    await service.agent.end_conversation(last_user_id, conversation_id)
-                except Exception:
-                    logger.exception(
-                        "conversation finalize on disconnect failed "
-                        "(user_id=%s conversation_id=%s)",
-                        last_user_id,
-                        conversation_id,
-                    )
-            # Export this connection's spans now (no-op when telemetry is disabled).
-            telemetry.flush()
+                    with contextlib.suppress(Exception):
+                        await websocket.send_json({"type": "error", "error": str(exc)})
+
+        await asyncio.gather(_receive(), _run_turns())
+        # Conversation ended → embed it as one episodic point (off the hot path).
+        # Log a finalize failure here rather than let it surface as an unhandled
+        # task error; the idle sweeper is the backstop if this disconnect path fails.
+        if last_user_id is not None:
+            try:
+                await service.agent.end_conversation(last_user_id, conversation_id)
+            except Exception:
+                logger.exception(
+                    "conversation finalize on disconnect failed "
+                    "(user_id=%s conversation_id=%s)",
+                    last_user_id,
+                    conversation_id,
+                )
+        # Export this connection's spans now (no-op when telemetry is disabled).
+        telemetry.flush()
 
     @app.get("/sse/{conversation_id}")
     async def sse(
@@ -135,6 +159,11 @@ def create_app(service: AgentService) -> FastAPI:
                 async for event in service.agent.run_turn(
                     user_id, conversation_id, message
                 ):
+                    if isinstance(event, ToolApprovalRequired):
+                        # SSE is one-way: the client cannot send an approval response
+                        # on this connection, so auto-deny immediately. The loop's
+                        # wait_for sees the future already resolved and returns False.
+                        service.agent.resolve_approval(event.call_id, False)
                     yield _sse_frame(encode_event(event))
             except UnauthorizedError as exc:
                 yield _sse_frame({"type": "error", "error": str(exc)})

@@ -12,6 +12,7 @@ from typing import Any
 from agent_kit.agent.events import (
     AgentEvent,
     TextDelta,
+    ToolApprovalRequired,
     ToolCallStarted,
     ToolResult,
     TurnComplete,
@@ -28,6 +29,14 @@ def encode_event(event: AgentEvent) -> dict[str, Any]:
             "call_id": event.call_id,
             "name": event.name,
             "arguments": event.arguments,
+        }
+    if isinstance(event, ToolApprovalRequired):
+        return {
+            "type": "tool_approval_required",
+            "call_id": event.call_id,
+            "name": event.name,
+            "arguments": event.arguments,
+            "timeout_s": event.timeout_s,
         }
     if isinstance(event, ToolResult):
         return {

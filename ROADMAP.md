@@ -98,8 +98,20 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⬜ not started
   time-to-first-token). Mirrors `llm_kit`'s own in-process `TokenBucket` posture;
   documented multi-worker caveat (effective ceiling ≈ workers × the configured rate).
   A shared-store (Redis) backing is a later scaling step, not needed now.
-- **Deferred** (need a human-in-the-loop pause / auth subsystem not present yet):
-  approval gates ("requires user approval") and auth requirements.
+- **Human-in-the-loop (HITL) approval gates** (`requires_approval: bool`,
+  `approval_timeout_s: float` on `ToolPolicy`). When set, the agent loop pauses
+  before executing the tool and emits `ToolApprovalRequired(call_id, name, arguments,
+  timeout_s)`. Over **WebSocket**: the WS handler (now two concurrent coroutines via
+  `asyncio.gather` — `_receive` + `_run_turns`) routes an incoming
+  `{"type":"approval","call_id":…,"approved":bool}` message to
+  `Agent.resolve_approval()`, which resolves an `asyncio.Future` the loop is
+  awaiting. On approval → `ToolCallStarted` + normal execute. On denial or timeout →
+  `ToolResult(ok=False)` with a distinct reason fed back to the model as an
+  observation ("user denied approval" vs "approval request timed out"). Over **SSE**:
+  automatically denied (SSE is one-way); the loop's future is resolved to `False`
+  immediately. Futures are in-process (same documented-caveat class as the rate
+  limiter; WS connections are typically sticky so this is safe for single-worker and
+  sticky-LB multi-worker deploys).
 
 ### ✅ M11 — Conversation listing & metadata API
 - `GET /conversations?user_id=...` → `{conversations: [...]}` of transcript-free

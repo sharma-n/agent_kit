@@ -66,6 +66,9 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         self._tools[tool.name] = tool
 
+    def get_policy(self, tool_name: str) -> ToolPolicy | None:
+        return self._policies.get(tool_name)
+
     async def definitions(self, user_id: str) -> list[ToolDefinition]:
         """Only the tools this user is allowed to use, in registration order."""
         allowed = await self._permissions.allowed_tools(user_id)
